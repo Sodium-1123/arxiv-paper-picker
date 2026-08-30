@@ -190,11 +190,20 @@ export default function HomePage() {
     router.refresh();
   };
 
-  // 共有URLの構築（arXiv IDのカンマ区切りで短縮URLを生成）
+  // 共有URLの構築（IDプレフィックスを除去して綺麗な短縮IDリストを作成）
   const getShareUrl = () => {
     if (typeof window === "undefined" || papers.length === 0) return "";
-    const ids = papers.map((p) => p.arxiv_id).join(",");
-    return `${window.location.origin}/share?ids=${encodeURIComponent(ids)}`;
+    const cleanIds = papers.map((p) => {
+      let raw = p.arxiv_id;
+      if (raw.startsWith("https://openalex.org/")) {
+        raw = raw.replace("https://openalex.org/", "");
+      }
+      if (raw.startsWith("https://arxiv.org/abs/")) {
+        raw = raw.replace("https://arxiv.org/abs/", "");
+      }
+      return raw;
+    });
+    return `${window.location.origin}/share?ids=${encodeURIComponent(cleanIds.join(","))}`;
   };
 
   const handleCopyLink = () => {

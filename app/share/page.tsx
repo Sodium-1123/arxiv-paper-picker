@@ -37,8 +37,11 @@ function ShareContent() {
       setError("");
 
       if (idsParam) {
-        // ID指定された短縮パラメータの処理
-        const idList = idsParam.split(",").map((id) => id.trim()).filter(Boolean);
+        const idList = idsParam
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
+
         if (idList.length === 0) {
           setError("指定された論文IDが存在しません。");
           setLoading(false);
@@ -46,43 +49,87 @@ function ShareContent() {
         }
 
         try {
-          // OpenAlex APIで各arXiv IDの論文情報をまとめて取得
-          const filterParam = idList
-            .map((id) => (id.startsWith("https://") ? id : `https://arxiv.org/abs/${id}`))
-            .join("|");
-          
-          const openAlexUrl = `https://api.openalex.org/works?filter=locations.source.id:s4306400194,ids.arxiv:${encodeURIComponent(filterParam)}&per_page=50`;
-          
-          const res = await fetch(openAlexUrl);
-          const data = await res.json();
+          // IDを標準化（https://... などのプレフィックスを除去）
+          const cleanIds = idList.map((id) => {
+            if (id.startsWith("https://openalex.org/")) {
+              return id.replace("https://openalex.org/", "");
+            }
+            if (id.startsWith("https://arxiv.org/abs/")) {
+              return id.replace("https://arxiv.org/abs/", "");
+            }
+            return id;
+          });
 
-          if (data.results && data.results.length > 0) {
-            const fetchedPapers: Paper[] = data.results.map((item: any) => ({
-              arxiv_id: item.ids?.arxiv
+          const openAlexIds = cleanIds.filter((id) => id.startsWith("W"));
+          const arxivIds = cleanIds.filter((id) => !id.startsWith("W"));
+
+          let fetchedResults: any[] = [];
+
+          // 1. OpenAlex ID（W...）による検索
+          if (openAlexIds.length > 0) {
+            const openAlexFilter = openAlexIds
+              .map((id) => `https://openalex.org/${id}`)
+              .join("|");
+            const res = await fetch(
+              `https://api.openalex.org/works?filter=openalex:${encodeURIComponent(
+                openAlexFilter
+              )}&per_page=50`
+            );
+            const data = await res.json();
+            if (data.results) {
+              fetchedResults = [...fetchedResults, ...data.results];
+            }
+          }
+
+          // 2. arXiv ID による検索
+          if (arxivIds.length > 0) {
+            const arxivFilter = arxivIds
+              .map((id) => (id.startsWith("http") ? id : `https://arxiv.org/abs/${id}`))
+              .join("|");
+            const res = await fetch(
+              `https://api.openalex.org/works?filter=locations.source.id:s4306400194,ids.arxiv:${encodeURIComponent(
+                arxivFilter
+              )}&per_page=50`
+            );
+            const data = await res.json();
+            if (data.results) {
+              fetchedResults = [...fetchedResults, ...data.results];
+            }
+          }
+
+          if (fetchedResults.length > 0) {
+            const parsedPapers: Paper[] = fetchedResults.map((item: any) => {
+              const arxivId = item.ids?.arxiv
                 ? item.ids.arxiv.replace("https://arxiv.org/abs/", "")
-                : item.id,
-              title: item.title,
-              authors: item.authorships?.map((a: any) => a.author.display_name) || [],
-              abstract: item.abstract_inverted_index
-                ? "Abstract available on arXiv"
-                : "",
-              citation_count: item.cited_by_count || 0,
-              categories: item.concepts?.slice(0, 2).map((c: any) => c.display_name) || ["arXiv"],
-              url: item.ids?.arxiv || item.doi || item.id,
-            }));
-            setPapers(fetchedPapers);
+                : item.id.replace("https://openalex.org/", "");
+
+              const title = item.title || "Untitled Paper";
+              const authors =
+                item.authorships?.map((a: any) => a.author.display_name) || [
+                  "Unknown Author",
+                ];
+              const citationCount = item.cited_by_count ?? 0;
+              const categories =
+                item.concepts?.slice(0, 2).map((c: any) => c.display_name) || [
+                  "arXiv",
+                ];
+              const url = item.ids?.arxiv || item.doi || item.id;
+
+              return {
+                arxiv_id: arxivId,
+                title,
+                authors,
+                abstract: item.abstract_inverted_index
+                  ? "Abstract available on arXiv"
+                  : "",
+                citation_count: citationCount,
+                categories,
+                url,
+              };
+            });
+            setPapers(parsedPapers);
           } else {
-            // IDでの検索ヒットがない場合のフォールバック（シンプルなプレースホルダー生成）
-            const fallbackPapers: Paper[] = idList.map((id) => ({
-              arxiv_id: id,
-              title: `arXiv Paper (${id})`,
-              authors: ["arXiv Author"],
-              abstract: "",
-              citation_count: 0,
-              categories: ["arXiv"],
-              url: id.startsWith("http") ? id : `https://arxiv.org/abs/${id}`,
-            }));
-            setPapers(fallbackPapers);
+            setError("指定された論文の取得に失敗しました。");
           }
         } catch (err: any) {
           console.error("Shared papers fetch error:", err);
