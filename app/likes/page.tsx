@@ -30,8 +30,10 @@ export default function LikesPage() {
   const fetchLikedPapers = async () => {
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
-    if (!user) {
+    
+    if (userError || !user) {
       router.push("/auth");
       return;
     }
@@ -41,7 +43,17 @@ export default function LikesPage() {
       .select("*")
       .order("created_at", { ascending: false });
 
-    if (!error && data) {
+    if (error) {
+      if (
+        error.code === "PGRST301" ||
+        error.message.toLowerCase().includes("jwt") ||
+        error.message.toLowerCase().includes("unauthorized")
+      ) {
+        router.push("/auth");
+        return;
+      }
+      console.warn("いいねデータ取得エラー:", error.message);
+    } else if (data) {
       setPapers(data);
     }
     setLoading(false);
@@ -51,6 +63,12 @@ export default function LikesPage() {
     const { error } = await supabase.from("liked_papers").delete().eq("id", id);
     if (!error) {
       setPapers((prev) => prev.filter((p) => p.id !== id));
+    } else if (
+      error.code === "PGRST301" ||
+      error.message.toLowerCase().includes("jwt") ||
+      error.message.toLowerCase().includes("unauthorized")
+    ) {
+      router.push("/auth");
     }
   };
 

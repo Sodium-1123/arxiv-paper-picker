@@ -24,7 +24,7 @@ export default function HomePage() {
   const [totalCount, setTotalCount] = useState<number>(10);
   const [minCitations, setMinCitations] = useState<number>(10);
   const [weights, setWeights] = useState<{ [key: string]: number }>(
-    ARXIV_CATEGORIES.reduce((acc, cat) => ({ ...acc, [cat.id]: 10 }), {}),
+    ARXIV_CATEGORIES.reduce((acc, cat) => ({ ...acc, [cat.id]: 10 }), {})
   );
 
   const [papers, setPapers] = useState<Paper[]>([]);
@@ -33,7 +33,11 @@ export default function HomePage() {
   const [message, setMessage] = useState<string>("");
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
-  // 1. 初回読み込み時のストレージ復元と「いいね」済みデータの同期
+  // 共有モーダル用ステート
+  const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+
+  // 1. 認証状態の監視とデータ同期
   useEffect(() => {
     const savedCount = localStorage.getItem("arxiv_totalCount");
     if (savedCount) setTotalCount(Number(savedCount));
@@ -51,16 +55,23 @@ export default function HomePage() {
       try {
         const {
           data: { user },
+          error: userError,
         } = await supabase.auth.getUser();
-        if (!user) return;
+
+        if (userError || !user) {
+          router.push("/auth");
+          return;
+        }
 
         const { data, error } = await supabase
           .from("liked_papers")
           .select("arxiv_id");
 
         if (error) {
-          // console.error だと Next.js が赤画面を出すため console.warn に変更
           console.warn("いいね同期注意:", error.message);
+          if (error.code === "PGRST301" || error.message.includes("JWT")) {
+            router.push("/auth");
+          }
         } else if (data) {
           setLikedIds(new Set(data.map((item) => item.arxiv_id)));
         }
@@ -68,10 +79,22 @@ export default function HomePage() {
         console.warn("同期例外:", err);
       }
     };
-    syncLikedStatus();
 
+    syncLikedStatus();
     setIsInitialized(true);
-  }, []);
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        router.push("/auth");
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [router, supabase]);
 
   // 2. 設定変更時の自動保存
   useEffect(() => {
@@ -109,17 +132,19 @@ export default function HomePage() {
     }
   };
 
-  // 4. いいね保存処理（エラー通知と状態更新を改善）
+  // 4. いいね保存処理
   const handleLike = async (paper: Paper) => {
     setMessage("");
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
-      setMessage(
-        "エラー: ログイン状態が取得できません。再ログインしてください。",
-      );
+    if (userError || !user) {
+      setMessage("セッションが切れました。ログイン画面へ移動します...");
+      setTimeout(() => {
+        router.push("/auth");
+      }, 1000);
       return;
     }
 
@@ -138,10 +163,18 @@ export default function HomePage() {
       if (error.code === "23505") {
         setMessage("この論文は既に保存されています。");
         setLikedIds((prev) => new Set([...Array.from(prev), paper.arxiv_id]));
+      } else if (
+        error.code === "PGRST301" ||
+        error.message.toLowerCase().includes("jwt") ||
+        error.message.toLowerCase().includes("unauthorized")
+      ) {
+        setMessage("認証エラーが発生しました。ログイン画面へリダイレクトします。");
+        setTimeout(() => {
+          router.push("/auth");
+        }, 1000);
       } else {
-        // エラーコードと詳細を表示
         setMessage(
-          `保存失敗 [${error.code}]: ${error.message} (${error.details || "詳細なし"})`,
+          `保存失敗 [${error.code}]: ${error.message} (${error.details || "詳細なし"})`
         );
       }
     } else {
@@ -154,6 +187,34 @@ export default function HomePage() {
     await supabase.auth.signOut();
     localStorage.removeItem("arxiv_papers");
     router.push("/auth");
+    router.refresh();
+  };
+
+  // 共有URLの構築ヘルパー
+  const getShareUrl = () => {
+    if (typeof window === "undefined" || papers.length === 0) return "";
+    const encoded = encodeURIComponent(JSON.stringify(papers));
+    return `${window.location.origin}/share?d=${encoded}`;
+  };
+
+  const handleCopyLink = () => {
+    const url = getShareUrl();
+    if (url) {
+      navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
+  const handleTwitterShare = () => {
+    const url = getShareUrl();
+    const text = encodeURIComponent(
+      "今回ランダムに選んだ論文はこれでした！📚✨\n"
+    );
+    const twitterUrl = `https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(
+      url
+    )}`;
+    window.open(twitterUrl, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -245,6 +306,21 @@ export default function HomePage() {
           </div>
         )}
 
+        {papers.length > 0 && (
+          <div className="flex justify-between items-center bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+            <span className="text-sm font-bold text-gray-700">
+              抽出された論文 ({papers.length}件)
+            </span>
+            <button
+              onClick={() => setShowShareModal(true)}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm font-semibold transition shadow-sm"
+            >
+              <span>🔗</span>
+              <span>今回選んだ論文を共有する</span>
+            </button>
+          </div>
+        )}
+
         <section className="space-y-4">
           {papers.map((paper, index) => {
             const isLiked = likedIds.has(paper.arxiv_id);
@@ -265,7 +341,7 @@ export default function HomePage() {
                   <button
                     onClick={() => handleLike(paper)}
                     disabled={isLiked}
-                    className={`px-3 py-1 rounded text-sm font-semibold transition ${
+                    className={`px-3 py-1 rounded text-sm font-semibold transition shrink-0 ${
                       isLiked
                         ? "bg-gray-300 text-gray-600 cursor-not-allowed"
                         : "bg-pink-500 hover:bg-pink-600 text-white"
@@ -276,14 +352,14 @@ export default function HomePage() {
                 </div>
 
                 <p className="text-sm text-gray-600 mb-2">
-                  著者: {paper.authors.join(", ")}
+                  著者: {Array.isArray(paper.authors) ? paper.authors.join(", ") : paper.authors}
                 </p>
 
                 <div className="flex gap-4 text-xs text-gray-500 mb-3">
                   <span>
                     引用数: <strong>{paper.citation_count}</strong>
                   </span>
-                  <span>カテゴリ: {paper.categories.join(", ")}</span>
+                  <span>カテゴリ: {Array.isArray(paper.categories) ? paper.categories.join(", ") : paper.categories}</span>
                 </div>
 
                 {paper.abstract && (
@@ -296,6 +372,67 @@ export default function HomePage() {
           })}
         </section>
       </main>
+
+      {/* 共有モーダル */}
+      {showShareModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="text-lg font-bold text-gray-800">
+                🎉 今回選んだ論文を共有
+              </h3>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-sm text-gray-600">
+              「今回ランダムに選んだ論文はこれでした！」の共有用URLを作成しました。リンクをコピーするかX(Twitter)で共有できます。
+            </p>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-500">
+                共有用URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={getShareUrl()}
+                  className="w-full bg-gray-50 border border-gray-300 p-2 rounded text-xs text-gray-700 focus:outline-none"
+                />
+                <button
+                  onClick={handleCopyLink}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded shrink-0 transition"
+                >
+                  {copied ? "コピー完了！" : "コピー"}
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2 flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={handleTwitterShare}
+                className="flex-1 flex items-center justify-center gap-2 bg-black hover:bg-gray-800 text-white font-bold py-2.5 rounded-lg text-sm transition"
+              >
+                <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                </svg>
+                X (Twitter) でポストする
+              </button>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2.5 px-4 rounded-lg text-sm transition"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

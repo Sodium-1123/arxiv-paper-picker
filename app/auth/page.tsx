@@ -11,6 +11,7 @@ export default function AuthPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -18,27 +19,34 @@ export default function AuthPage() {
     e.preventDefault();
     setErrorMsg("");
     setMessage("");
+    setLoading(true);
 
-    if (isSignUp) {
-      // 新規登録
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) {
-        setErrorMsg(error.message);
+    try {
+      if (isSignUp) {
+        // 新規登録
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) {
+          setErrorMsg(error.message);
+        } else {
+          setMessage("アカウントの作成が完了しました！ログインしてください。");
+        }
       } else {
-        setMessage("アカウントの作成が完了しました！");
+        // ログイン
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) {
+          setErrorMsg(error.message);
+        } else {
+          router.push("/");
+          router.refresh();
+        }
       }
-    } else {
-      // ログイン
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        setErrorMsg(error.message);
-      } else {
-        router.push("/");
-        router.refresh();
-      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "認証処理中にエラーが発生しました。");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -84,9 +92,14 @@ export default function AuthPage() {
         </div>
         <button
           type="submit"
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded transition"
+          disabled={loading}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded transition disabled:bg-blue-300"
         >
-          {isSignUp ? "登録する" : "ログインする"}
+          {loading
+            ? "処理中..."
+            : isSignUp
+            ? "登録する"
+            : "ログインする"}
         </button>
       </form>
 
