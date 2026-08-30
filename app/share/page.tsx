@@ -22,28 +22,90 @@ function ShareContent() {
   const supabase = createClient();
 
   const [papers, setPapers] = useState<Paper[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>("");
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [message, setMessage] = useState<string>("");
 
   useEffect(() => {
-    // 1. URLクエリからデータ取得
-    const encodedData = searchParams.get("d");
-    if (encodedData) {
-      try {
-        const decodedStr = decodeURIComponent(encodedData);
-        const parsedPapers: Paper[] = JSON.parse(decodedStr);
-        setPapers(parsedPapers);
-      } catch (err) {
-        console.error("Failed to parse shared papers data", err);
-        setError("共有データの読み込みに失敗しました。URLが正しくない可能性があります。");
-      }
-    } else {
-      setError("共有された論文データが見つかりません。");
-    }
+    const idsParam = searchParams.get("ids");
+    const legacyDataParam = searchParams.get("d");
 
-    // 2. 現在のログイン状況チェック
+    const fetchSharedPapers = async () => {
+      setLoading(true);
+      setError("");
+
+      if (idsParam) {
+        // ID指定された短縮パラメータの処理
+        const idList = idsParam.split(",").map((id) => id.trim()).filter(Boolean);
+        if (idList.length === 0) {
+          setError("指定された論文IDが存在しません。");
+          setLoading(false);
+          return;
+        }
+
+        try {
+          // OpenAlex APIで各arXiv IDの論文情報をまとめて取得
+          const filterParam = idList
+            .map((id) => (id.startsWith("https://") ? id : `https://arxiv.org/abs/${id}`))
+            .join("|");
+          
+          const openAlexUrl = `https://api.openalex.org/works?filter=locations.source.id:s4306400194,ids.arxiv:${encodeURIComponent(filterParam)}&per_page=50`;
+          
+          const res = await fetch(openAlexUrl);
+          const data = await res.json();
+
+          if (data.results && data.results.length > 0) {
+            const fetchedPapers: Paper[] = data.results.map((item: any) => ({
+              arxiv_id: item.ids?.arxiv
+                ? item.ids.arxiv.replace("https://arxiv.org/abs/", "")
+                : item.id,
+              title: item.title,
+              authors: item.authorships?.map((a: any) => a.author.display_name) || [],
+              abstract: item.abstract_inverted_index
+                ? "Abstract available on arXiv"
+                : "",
+              citation_count: item.cited_by_count || 0,
+              categories: item.concepts?.slice(0, 2).map((c: any) => c.display_name) || ["arXiv"],
+              url: item.ids?.arxiv || item.doi || item.id,
+            }));
+            setPapers(fetchedPapers);
+          } else {
+            // IDでの検索ヒットがない場合のフォールバック（シンプルなプレースホルダー生成）
+            const fallbackPapers: Paper[] = idList.map((id) => ({
+              arxiv_id: id,
+              title: `arXiv Paper (${id})`,
+              authors: ["arXiv Author"],
+              abstract: "",
+              citation_count: 0,
+              categories: ["arXiv"],
+              url: id.startsWith("http") ? id : `https://arxiv.org/abs/${id}`,
+            }));
+            setPapers(fallbackPapers);
+          }
+        } catch (err: any) {
+          console.error("Shared papers fetch error:", err);
+          setError("論文情報の取得中にエラーが発生しました。");
+        }
+      } else if (legacyDataParam) {
+        // 旧方式（?d=... データ直接埋め込み）の互換性サポート
+        try {
+          const decodedStr = decodeURIComponent(legacyDataParam);
+          const parsedPapers: Paper[] = JSON.parse(decodedStr);
+          setPapers(parsedPapers);
+        } catch (err) {
+          console.error("Failed to parse shared papers data", err);
+          setError("共有データの読み込みに失敗しました。");
+        }
+      } else {
+        setError("共有された論文データが見つかりません。");
+      }
+
+      setLoading(false);
+    };
+
+    // ログイン情報の確認
     const checkUser = async () => {
       const {
         data: { user },
@@ -51,14 +113,14 @@ function ShareContent() {
       setCurrentUser(user);
 
       if (user) {
-        const { data } = await supabase
-          .from("liked_papers")
-          .select("arxiv_id");
+        const { data } = await supabase.from("liked_papers").select("arxiv_id");
         if (data) {
           setLikedIds(new Set(data.map((item) => item.arxiv_id)));
         }
       }
     };
+
+    fetchSharedPapers();
     checkUser();
   }, [searchParams, supabase]);
 
@@ -124,7 +186,13 @@ function ShareContent() {
           </div>
         )}
 
-        {error ? (
+        {loading ? (
+          <div className="bg-white p-12 text-center rounded-lg shadow-sm border border-gray-200">
+            <p className="text-gray-500 font-medium animate-pulse">
+              共有された論文データを読み込み中...
+            </p>
+          </div>
+        ) : error ? (
           <div className="bg-red-100 text-red-600 p-4 rounded-lg text-center font-medium">
             {error}
           </div>

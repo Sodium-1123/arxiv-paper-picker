@@ -190,11 +190,11 @@ export default function HomePage() {
     router.refresh();
   };
 
-  // 共有URLの構築ヘルパー
+  // 共有URLの構築（arXiv IDのカンマ区切りで短縮URLを生成）
   const getShareUrl = () => {
     if (typeof window === "undefined" || papers.length === 0) return "";
-    const encoded = encodeURIComponent(JSON.stringify(papers));
-    return `${window.location.origin}/share?d=${encoded}`;
+    const ids = papers.map((p) => p.arxiv_id).join(",");
+    return `${window.location.origin}/share?ids=${encodeURIComponent(ids)}`;
   };
 
   const handleCopyLink = () => {
@@ -390,7 +390,7 @@ export default function HomePage() {
             </div>
 
             <p className="text-sm text-gray-600">
-              「今回ランダムに選んだ論文はこれでした！」の共有用URLを作成しました。リンクをコピーするかX(Twitter)で共有できます。
+              「今回ランダムに選んだ論文はこれでした！」の共有用URLを作成しました。短縮されたリンクをコピーまたはX(Twitter)でシェアできます。
             </p>
 
             <div className="space-y-2">
